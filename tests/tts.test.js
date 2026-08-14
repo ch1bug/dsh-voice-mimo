@@ -166,11 +166,12 @@ test("applyStyle: voiceclone keeps the clone instruction and appends the style",
   assert.equal(out.text, "hi");
 });
 
-test("applyStyle: sing → (唱歌) prefix; sing+style → (唱歌 温柔) same bracket", () => {
+test("applyStyle: sing → bare (唱歌) prefix; style is NOT applied when singing", () => {
   const s1 = applyStyle({ style: "", sing: true, voiceType: "preset", userContent: "u", text: "原谅我这一生不羁放纵爱自由" });
   assert.equal(s1.text, "(唱歌)原谅我这一生不羁放纵爱自由");
   const s2 = applyStyle({ style: "温柔", sing: true, voiceType: "preset", userContent: "u", text: "小星星" });
-  assert.equal(s2.text, "(唱歌 温柔)小星星");
+  assert.equal(s2.text, "(唱歌)小星星"); // combined (唱歌 温柔) was verified to read, not sing
+  assert.equal(s2.userContent, "u"); // style not routed anywhere
 });
 
 test("applyStyle: sing with a non-preset voice throws (singing is preset-only)", () => {
@@ -209,9 +210,9 @@ test("DEFAULT_STYLE is 温柔", () => {
 
 test("truncation happens AFTER tag prefixing: tags survive, tail is cut (review fix)", () => {
   const applied = applyStyle({ style: "温柔", sing: true, voiceType: "preset", userContent: "u", text: "词".repeat(2499) });
-  // (唱歌 温柔) is 6 codepoints + 2499 = 2505 > 2500 → truncated, prefix intact
+  // (唱歌) is 4 codepoints + 2499 = 2503 > 2500 → truncated, prefix intact
   const out = truncateTtsText(applied.text);
   assert.equal(out.truncated, true);
-  assert.ok(out.text.startsWith("(唱歌 温柔)"));
+  assert.ok(out.text.startsWith("(唱歌)"));
   assert.equal(Array.from(out.text).length, 2500);
 });
