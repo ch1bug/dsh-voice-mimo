@@ -1,7 +1,9 @@
 # dsh-voice-mimo
 
-Voice for DeepSeek Harness backed by **Xiaomi MiMo**: a browser-native voice UI
-plus agent tools that call MiMo ASR/TTS directly, with a configurable voice map.
+Xiaomi MiMo-powered voice for DeepSeek Harness: a browser-native 🎤/🧠/🔊 UI
+plus agent tools — `voice_transcribe` (MiMo ASR), `voice_understand`
+(MiMo-v2.5 semantic analysis), `voice_speak` (MiMo TTS with a configurable
+voice map: preset / voicedesign / voiceclone).
 
 > **Fork of [zhuiyueya/dsh-voice](https://github.com/zhuiyueya/dsh-voice) (MIT).**
 > The Settings page structure follows [Anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) (MIT).
