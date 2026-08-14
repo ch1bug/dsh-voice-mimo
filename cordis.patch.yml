@@ -1,9 +1,8 @@
-# dsh-voice bundle layer — applied when a profile lists this bundle
+# dsh-voice-mimo bundle layer — applied when a profile lists this bundle
 # (package.json declares `dsh.bundle.patch` pointing at this file).
 #
-# PITFALL: `name` is a PACKAGE NAME (resolved through the profile's node_modules
-# or the installation fallback `$DSH_HOME/profiles/node_modules`), NOT a path.
-# `dsh-voice` is this package's main entry (→ lib/index.js).
+# `name` is a PACKAGE NAME resolved through the profile's node_modules;
+# `dsh-voice-mimo` is this package's main entry (→ lib/index.js).
 - insert:
-    - id: dsh-voice
-      name: dsh-voice
+    - id: dsh-voice-mimo
+      name: dsh-voice-mimo
