@@ -1,7 +1,7 @@
 {
   "name": "dsh-voice",
-  "version": "0.1.0",
-  "description": "Voice for DeepSeek Harness — give text-only DeepSeek ears and a mouth: browser-native speech input (STT) + read-aloud (TTS), plus Whisper/TTS agent tools.",
+  "version": "0.1.1",
+  "description": "Voice for DeepSeek Harness \u2014 give text-only DeepSeek ears and a mouth: browser-native speech input (STT) + read-aloud (TTS), plus Whisper/TTS agent tools.",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -73,16 +73,17 @@ dsh plugin --profile web add dsh-voice
 
 ## ⚙️ 配置
 
-Web UI **无需任何配置**。如需自定义转写/朗读的语言、语速、音调，编辑 [`lib/client.js`](lib/client.js) 顶部的常量（`STT_LANG` / `TTS_LANG` / `TTS_RATE` / `TTS_PITCH`）。
+**🎤 麦克风按钮需要配置 `voice.stt.apiBase`**（浏览器录音后发给宿主上的 Whisper 兼容后端）。**🔊 朗读无需任何配置**（浏览器 `speechSynthesis`）。如需自定义朗读的语言/语速/音调，编辑 [`lib/client.js`](lib/client.js) 顶部的常量（`TTS_LANG` / `TTS_RATE` / `TTS_PITCH`）。
 
-Agent 工具通过 `settings.yaml` 的 `voice:` 命名空间配置（可在 Web 设置页热更新）：
+`settings.yaml`：
 
 ```yaml
 voice:
-  stt:                        # voice_transcribe 工具
+  stt:                        # 麦克风按钮 + voice_transcribe 工具
     enabled: true
-    apiBase: ""               # 留空 = https://api.openai.com/v1
-                              # 本地 whisper.cpp：http://127.0.0.1:8080/v1
+    apiBase: ""               # 麦克风必需。示例：
+                              #   硅基流动 SiliconFlow：https://api.siliconflow.cn/v1
+                              #   本地 whisper.cpp：http://127.0.0.1:8080/v1
     apiKeyEnv: VOICE_STT_API_KEY
     model: whisper-1
     language: ""              # zh / en / ... ；空 = 自动检测
@@ -95,7 +96,9 @@ voice:
     format: mp3
 ```
 
-> **完全免费 / 免 key**：把 `stt.apiBase` 指向本地 [whisper.cpp](https://github.com/ggerganov/whisper.cpp) 的 OpenAI 兼容 server，把 `tts.apiBase` 指向实现了 `/audio/speech` 的本地 Kokoro / Piper HTTP 包装。
+> **为什么麦克风需要后端**：Chrome 内置的 `SpeechRecognition` 会把音频上传到 Google，国内无法访问（会报 `识别出错：network`）。dsh-voice 改用 `MediaRecorder` 录音，再通过**你自己的** Whisper 兼容后端转写。两个免费、免 key 的选择：
+> - **[硅基流动 SiliconFlow](https://siliconflow.cn)**（国内可访问、有免费额度）—— `apiBase: https://api.siliconflow.cn/v1`，模型 `FunAudioLLM/SenseVoiceSmall` 或 `whisper-1`。
+> - **本地 [whisper.cpp](https://github.com/ggerganov/whisper.cpp)**（完全离线）—— `apiBase: http://127.0.0.1:8080/v1`（无需 key）。
 
 ## 🧰 Agent 工具
 

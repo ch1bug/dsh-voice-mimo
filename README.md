@@ -73,16 +73,17 @@ Then restart `dsh web` (or wait for HMR). You should see **🎤** in the compose
 
 ## ⚙️ Configuration
 
-The Web UI needs **no configuration**. To customize transcription/read-aloud language, rate, and pitch, edit the constants at the top of [`lib/client.js`](lib/client.js) (`STT_LANG`, `TTS_LANG`, `TTS_RATE`, `TTS_PITCH`).
+The **🎤 mic button needs `voice.stt.apiBase`** (the browser records audio and sends it to the host's Whisper-compatible backend). The **🔊 read-aloud needs nothing** (browser `speechSynthesis`). To customize read-aloud language/rate/pitch, edit the constants at the top of [`lib/client.js`](lib/client.js) (`TTS_LANG`, `TTS_RATE`, `TTS_PITCH`).
 
-The agent tools are configured via the `voice:` namespace in `settings.yaml` (hot-reloadable from the Web settings page):
+`settings.yaml`:
 
 ```yaml
 voice:
-  stt:                        # voice_transcribe tool
+  stt:                        # mic button + voice_transcribe tool
     enabled: true
-    apiBase: ""               # empty = https://api.openai.com/v1
-                              # local whisper.cpp: http://127.0.0.1:8080/v1
+    apiBase: ""               # REQUIRED for the mic. Examples:
+                              #   SiliconFlow: https://api.siliconflow.cn/v1
+                              #   local whisper.cpp: http://127.0.0.1:8080/v1
     apiKeyEnv: VOICE_STT_API_KEY
     model: whisper-1
     language: ""              # zh / en / ... ; empty = auto-detect
@@ -95,7 +96,9 @@ voice:
     format: mp3
 ```
 
-> **Fully free / keyless**: point `stt.apiBase` at a local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) OpenAI-compatible server, and `tts.apiBase` at a local Kokoro / Piper HTTP wrapper implementing `/audio/speech`.
+> **Why the mic needs a backend**: Chrome's built-in `SpeechRecognition` uploads audio to Google, which is unreachable in some regions (you'd see `识别出错：network`). dsh-voice records with `MediaRecorder` and transcribes through *your* Whisper-compatible backend instead. Two free, keyless options:
+> - **[SiliconFlow](https://siliconflow.cn)** (China-friendly, free tier) — `apiBase: https://api.siliconflow.cn/v1`, model `FunAudioLLM/SenseVoiceSmall` or `whisper-1`.
+> - **Local [whisper.cpp](https://github.com/ggerganov/whisper.cpp)** — fully offline, `apiBase: http://127.0.0.1:8080/v1` (no key).
 
 ## 🧰 Agent tools
 
