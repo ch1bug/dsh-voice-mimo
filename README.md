@@ -47,3 +47,13 @@ dsh plugin --profile web add /path/to/dsh-drop-to-path
 
 MIT — see [LICENSE](LICENSE). Upstream dsh-voice (zhuiyueya) and the
 vision-toolkit settings pattern (Anionex) retain their copyright notices.
+
+## MiMo API 调用规范(官方文档确认)
+
+- **音频理解**(`mimo-v2.5`):`messages` 可带 `system` 身份提示;content 用
+  `input_audio`(data URL,Base64 ≤50MB)+ `text` 提示词;格式 wav/mp3/flac/m4a/ogg。
+- **语音识别**(`mimo-v2.5-asr`):仅 wav/mp3,Base64 ≤10MB;content 只含
+  `input_audio`(**不能**带 text part);语种走 `asr_options.language`
+  (auto/zh/en)。官方示例与本插件实现一致。
+- **语音合成**(`mimo-v2.5-tts` 系):目标文本在 assistant 消息,音色在
+  `audio.voice`;voicedesign 不能带 voice 需 `optimize_text_preview`。
