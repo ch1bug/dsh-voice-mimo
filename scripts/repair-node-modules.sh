@@ -8,7 +8,7 @@ FALLBACK="${DSH_HOME:-$HOME/.dsh}/profiles/node_modules"
 NM="$HERE/node_modules"
 rm -rf "$NM"
 mkdir -p "$NM/@deepseek-ai"
-for p in dsh-settings dsh-tools schemastery cordis cosmokit; do
+for p in dsh-settings dsh-tools schemastery cordis cosmokit dsh-home-paths; do
   ln -sfn "$FALLBACK/@deepseek-ai/$p" "$NM/@deepseek-ai/$p"
 done
 echo "dsh-voice-mimo node_modules repaired"
