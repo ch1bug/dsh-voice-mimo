@@ -211,3 +211,60 @@ test("audioHttp: long/ manifest artifact streams like tmp/", async () => {
   assert.equal(out.path, join(audioDir, "long", id));
   assert.equal((await readFile(out.path, "utf8")), "LONGDATA");
 });
+
+// ── #8: 🔊 speak 路由应用 tts.style(混合机制, 与 voice_speak 共用 applyStyle) ──
+
+function capturingFetch(calls) {
+  return async (url, init) => {
+    calls.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { audio: { data: Buffer.from("x").toString("base64") } } }] }) };
+  };
+}
+
+test("performSpeak: preset voice applies Settings tts.style into the user message", async () => {
+  const { ctx, getSettings } = await makeDeps();
+  getSettings().value.tts.style = "沉稳庄重";
+  const calls = [];
+  await performSpeak(ctx, getSettings, { text: "任务完成" }, { fetchImpl: capturingFetch(calls) });
+  const payload = calls[0];
+  assert.equal(payload.messages[0].content, "沉稳庄重"); // preset → natural-language user message
+  assert.equal(payload.messages[1].content, "任务完成");
+});
+
+test("performSpeak: explicit request style overrides Settings", async () => {
+  const { ctx, getSettings } = await makeDeps();
+  getSettings().value.tts.style = "温柔";
+  const calls = [];
+  await performSpeak(ctx, getSettings, { text: "hi", style: "轻快" }, { fetchImpl: capturingFetch(calls) });
+  assert.equal(calls[0].messages[0].content, "轻快");
+});
+
+test("performSpeak: voicedesign voice → (style) tag prefix, voice description kept in user message", async () => {
+  const { ctx, getSettings } = await makeDeps();
+  getSettings().value.voiceMap.fable = { type: "voicedesign", voice: "温柔治愈系女声" };
+  getSettings().value.tts.style = "温柔";
+  const calls = [];
+  await performSpeak(ctx, getSettings, { text: "晚安", voice: "fable" }, { fetchImpl: capturingFetch(calls) });
+  const payload = calls[0];
+  assert.equal(payload.messages[0].content, "温柔治愈系女声"); // description preserved
+  assert.equal(payload.messages[1].content, "(温柔)晚安"); // style as tag prefix
+});
+
+test("performSpeak: over-long read-aloud text is truncated and flagged", async () => {
+  const { ctx, getSettings } = await makeDeps();
+  const calls = [];
+  const longText = "字".repeat(2600);
+  const out = await performSpeak(ctx, getSettings, { text: longText }, { fetchImpl: capturingFetch(calls) });
+  assert.equal(out.truncated, true);
+  assert.equal(Array.from(calls[0].messages[1].content).length, 2500);
+});
+
+test("performSpeak: manifest entry records the applied style", async () => {
+  const { ctx, getSettings, audioDir } = await makeDeps();
+  getSettings().value.tts.style = "活泼";
+  const { manifestFind } = await import("../lib/audio-store.js");
+  const { audioUrl } = await performSpeak(ctx, getSettings, { text: "hi" }, { fetchImpl: capturingFetch([]) });
+  const id = audioUrl.split("/").pop();
+  const entry = await manifestFind(audioDir, id);
+  assert.equal(entry.style, "活泼");
+});
