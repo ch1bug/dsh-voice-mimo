@@ -16,8 +16,8 @@ voice map: preset / voicedesign / voiceclone).
 | 🎤 | **Voice input** — mic button in the composer, transcript written into the input box | Browser Web Speech API (zero key) |
 | 🔊 | **Read-aloud** — speaker button on every assistant reply, voice configurable in Settings (朗读音色) | **Xiaomi MiMo TTS** via host `/_dsh/voice-mimo/speak` |
 | 📄 | **`voice_transcribe` tool** — audio file → text | **Xiaomi MiMo ASR** (`mimo-v2.5-asr`) |
-| 🗣️ | **`voice_speak` tool** — text → spoken audio file | **Xiaomi MiMo TTS** (`mimo-v2.5-tts` / `-voicedesign`) |
-| ⚙️ | **Settings page** — 朗读音色 for 🔊 + voice map (OpenAI voice names → MiMo presets / voice design), live-applied | DSH Settings (vision-toolkit pattern) |
+| 🗣️ | **`voice_speak` tool** — text → spoken audio file; renders as a playable strip/card in the conversation | **Xiaomi MiMo TTS** (`mimo-v2.5-tts` / `-voicedesign`) |
+| ⚙️ | **Settings page** — 朗读音色 for 🔊 + voice map + `audio.inlineThreshold`/`longRetain*` retention policy, live-applied | DSH Settings (vision-toolkit pattern) |
 
 Unlike upstream dsh-voice (which targets OpenAI-compatible `/audio/transcriptions`
 and `/audio/speech` endpoints), this fork calls the MiMo API directly — MiMo has
@@ -42,13 +42,29 @@ Storage skeleton (layered `tmp/` + `long/`, per the audio-output spec):
 ```
 audioDir (Settings `audio.dir`, default ~/.dsh/cache/voice-mimo/)
 ├── tmp/            🔊 read-aloud artifacts — play-once; cleared on DSH startup
-├── long/           agent voice_speak artifacts (later slices)
+├── long/           agent voice_speak artifacts — playable/downloadable strips
 └── manifest.json   append-only JSONL: {id, sessionId, callId, path, createdAt, text, voice, model, notify}
 ```
 
 The plugin reads/writes only inside its audioDir subtree; `voice_speak` still
 respects an explicit `outPath`. DSH startup (`apply`) recreates the skeleton
 and clears leftover `tmp/` contents idempotently.
+
+## Agent speech in the conversation (#3)
+
+`voice_speak` without an explicit `outPath`:
+
+- writes the wav into `audioDir/long/` and appends a manifest row carrying the
+  calling session id + call id (for later archive cleanup / regenerate);
+- returns `{path, bytes, audioUrl, seconds, notify}` — the `audioUrl` streams
+  the file via `GET /_dsh/voice-mimo/audio/<id>.wav`;
+- the client renders the tool result as a compact play strip (≤
+  `audio.inlineThreshold` seconds, default 30) or a full card (> threshold),
+  each with ▶ playback and ⬇ download.
+
+With an explicit `outPath` the exact path is written instead (no strip, no
+manifest row). The Settings `audio.*` fields (`inlineThreshold`,
+`longRetainCount`, `longRetainDays`) tune presentation/retention live.
 
 ## Install
 

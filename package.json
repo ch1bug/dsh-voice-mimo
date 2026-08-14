@@ -1,7 +1,7 @@
 {
   "name": "dsh-voice-mimo",
-  "version": "0.2.0",
-  "description": "Voice for DeepSeek Harness backed by Xiaomi MiMo: browser-native 🎤/🔊 UI (MiMo TTS read-aloud) + voice_transcribe/voice_speak calling MiMo ASR/TTS directly, with a configurable voice map. Fork of zhuiyueya/dsh-voice (MIT).",
+  "version": "0.3.0",
+  "description": "Voice for DeepSeek Harness backed by Xiaomi MiMo: browser-native 🎤/🔊 UI (MiMo TTS read-aloud) + voice_transcribe/voice_speak calling MiMo ASR/TTS directly, with a configurable voice map and in-conversation speech strips. Fork of zhuiyueya/dsh-voice (MIT).",
   "license": "MIT",
   "repository": {
     "type": "git",

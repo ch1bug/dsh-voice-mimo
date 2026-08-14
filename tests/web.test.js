@@ -193,3 +193,21 @@ test("AudioLookupError: distinguish missing (404) from io (500)", async () => {
   assert.ok(new AudioLookupError("not-found", "x") instanceof Error);
   assert.equal(new AudioLookupError("not-found", "x").code, "not-found");
 });
+
+// ── #3: long-term (agent voice_speak) artifacts are served by /audio ──
+
+test("audioHttp: long/ manifest artifact streams like tmp/", async () => {
+  const { ctx, getSettings, audioDir } = await makeDeps();
+  const { manifestAppend, initAudioStore } = await import("../lib/audio-store.js");
+  const { writeFile, mkdir } = await import("node:fs/promises");
+  await initAudioStore(audioDir);
+  const id = "m-long.wav";
+  await mkdir(join(audioDir, "long"), { recursive: true });
+  await writeFile(join(audioDir, "long", id), "LONGDATA");
+  await manifestAppend(audioDir, { id, rel: `long/${id}`, sessionId: "s1", callId: "c1", text: "hi", voice: "alloy", model: "m", notify: false });
+  const out = await audioHttp(ctx, getSettings, id);
+  assert.equal(out.status, 200);
+  assert.equal(out.bytes, 8);
+  assert.equal(out.path, join(audioDir, "long", id));
+  assert.equal((await readFile(out.path, "utf8")), "LONGDATA");
+});

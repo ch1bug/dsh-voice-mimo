@@ -21,8 +21,39 @@ import {
   confinePath,
   entryAbsolutePath,
   tmpStats,
+  wavDurationSeconds,
+  planSpeechArtifact,
   wslPathOf,
 } from "../lib/audio-store.js";
+
+/** Build a minimal PCM WAV buffer: optional JUNK chunk, fmt (+ cbSize) + data. */
+function buildWav({ channels = 1, sampleRate = 24000, bits = 16, dataBytes = 48000, fmtExtra = false, junkBeforeFmt = false } = {}) {
+  const fmtSize = fmtExtra ? 18 : 16;
+  const junkSize = junkBeforeFmt ? 12 : 0; // JUNK payload, word-aligned
+  const fmtStart = 12 + (junkSize ? 8 + junkSize : 0);
+  const dataStart = fmtStart + 8 + fmtSize; // both branches word-aligned
+  const total = dataStart + 8 + dataBytes;
+  const buf = Buffer.alloc(total);
+  buf.write("RIFF", 0, "ascii");
+  buf.writeUInt32LE(total - 8, 4);
+  buf.write("WAVE", 8, "ascii");
+  if (junkBeforeFmt) {
+    buf.write("JUNK", 12, "ascii");
+    buf.writeUInt32LE(junkSize, 16);
+  }
+  buf.write("fmt ", fmtStart, "ascii");
+  buf.writeUInt32LE(fmtSize, fmtStart + 4);
+  buf.writeUInt16LE(1, fmtStart + 8); // PCM
+  buf.writeUInt16LE(channels, fmtStart + 10);
+  buf.writeUInt32LE(sampleRate, fmtStart + 12);
+  buf.writeUInt32LE(sampleRate * channels * (bits / 8), fmtStart + 16);
+  buf.writeUInt16LE(channels * (bits / 8), fmtStart + 20);
+  buf.writeUInt16LE(bits, fmtStart + 22);
+  if (fmtExtra) buf.writeUInt16LE(0, fmtStart + 8 + fmtSize - 2); // cbSize
+  buf.write("data", dataStart, "ascii");
+  buf.writeUInt32LE(dataBytes, dataStart + 4);
+  return buf;
+}
 
 async function tempAudioDir() {
   const root = await mkdtemp(join(tmpdir(), "voice-mimo-store-"));
@@ -138,4 +169,101 @@ test("tmpStats: counts entries and bytes", async () => {
 
 test("defaultAudioDir: join under home", () => {
   assert.equal(defaultAudioDir("/home/u/.dsh"), "/home/u/.dsh/cache/voice-mimo");
+});
+
+// ── wavDurationSeconds: WAV header parsing (#3) ──
+
+test("wavDurationSeconds: mono 24kHz 16-bit 1s", () => {
+  assert.equal(wavDurationSeconds(buildWav({ dataBytes: 48000 })), 1);
+});
+
+test("wavDurationSeconds: stereo 48kHz 16-bit 1s", () => {
+  assert.equal(wavDurationSeconds(buildWav({ channels: 2, sampleRate: 48000, dataBytes: 192000 })), 1);
+});
+
+test("wavDurationSeconds: 8-bit mono 8kHz 2s", () => {
+  assert.equal(wavDurationSeconds(buildWav({ bits: 8, sampleRate: 8000, dataBytes: 16000 })), 2);
+});
+
+test("wavDurationSeconds: fmt with cbSize extension still parses", () => {
+  assert.equal(wavDurationSeconds(buildWav({ fmtExtra: true, dataBytes: 48000 })), 1);
+});
+
+test("wavDurationSeconds: JUNK chunk before fmt is scanned past", () => {
+  assert.equal(wavDurationSeconds(buildWav({ junkBeforeFmt: true, dataBytes: 48000 })), 1);
+});
+
+test("wavDurationSeconds: non-PCM audioFormat (e.g. IEEE float 3) → 0", () => {
+  const buf = buildWav({ dataBytes: 48000 });
+  buf.writeUInt16LE(3, 20); // audioFormat = IEEE float
+  assert.equal(wavDurationSeconds(buf), 0);
+});
+
+test("wavDurationSeconds: truncated / non-WAV / too short → 0", () => {
+  assert.equal(wavDurationSeconds(Buffer.alloc(10)), 0);
+  assert.equal(wavDurationSeconds(Buffer.from("not a wav file at all")), 0);
+  const junk = buildWav({ dataBytes: 48000 });
+  junk.write("XXXX", 0, "ascii"); // corrupt RIFF magic
+  assert.equal(wavDurationSeconds(junk), 0);
+  assert.equal(wavDurationSeconds(null), 0);
+  assert.equal(wavDurationSeconds(Buffer.alloc(0)), 0);
+});
+
+// ── planSpeechArtifact: long/ + manifest vs explicit outPath (#3) ──
+
+test("planSpeechArtifact: no outPath → long/ + manifest entry", () => {
+  const plan = planSpeechArtifact({
+    outPath: null,
+    audioDir: "/data/audio",
+    id: "m-x.wav",
+    text: "你好",
+    voice: "alloy",
+    model: "mimo-v2.5-tts",
+    notify: true,
+    sessionId: "s1",
+    callId: "c1",
+  });
+  assert.equal(plan.path, "/data/audio/long/m-x.wav");
+  assert.deepEqual(plan.manifest, {
+    id: "m-x.wav",
+    rel: "long/m-x.wav",
+    sessionId: "s1",
+    callId: "c1",
+    text: "你好",
+    voice: "alloy",
+    model: "mimo-v2.5-tts",
+    notify: true,
+  });
+});
+
+test("planSpeechArtifact: explicit outPath → caller path, no manifest", () => {
+  const plan = planSpeechArtifact({
+    outPath: "/mnt/c/Users/me/out.wav",
+    audioDir: "/data/audio",
+    id: "m-x.wav",
+    text: "hi",
+    voice: "alloy",
+    model: "mimo-v2.5-tts",
+    notify: false,
+    sessionId: "s1",
+    callId: "c1",
+  });
+  assert.equal(plan.path, "/mnt/c/Users/me/out.wav");
+  assert.equal(plan.manifest, null);
+});
+
+test("planSpeechArtifact: non-string sessionId/callId are coerced to null (regression)", () => {
+  const plan = planSpeechArtifact({
+    outPath: null,
+    audioDir: "/data/audio",
+    id: "m-x.wav",
+    text: "t",
+    voice: "v",
+    model: "m",
+    notify: false,
+    sessionId: { some: "object" }, // what exec.agent.session used to be
+    callId: 42,
+  });
+  assert.equal(plan.manifest.sessionId, null);
+  assert.equal(plan.manifest.callId, null);
 });
