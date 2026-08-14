@@ -116,7 +116,7 @@ test("manifestAppend/Entries/Find: append-only JSONL round-trip", async () => {
   const dir = await tempAudioDir();
   await initAudioStore(dir);
   await manifestAppend(dir, { id: "m-1.wav", rel: "tmp/m-1.wav", text: "你好", voice: "alloy", model: "mimo-v2.5-tts" });
-  await manifestAppend(dir, { id: "m-2.wav", rel: "long/m-2.wav", sessionId: "s1", callId: "c1", notify: true });
+  await manifestAppend(dir, { id: "m-2.wav", rel: "long/m-2.wav", sessionId: "s1", callId: "c1", notify: true, style: "温柔" });
   const entries = await manifestEntries(dir);
   assert.equal(entries.length, 2);
   assert.equal(entries[0].id, "m-1.wav");
@@ -124,6 +124,7 @@ test("manifestAppend/Entries/Find: append-only JSONL round-trip", async () => {
   assert.equal(entries[0].createdAt.length > 0, true);
   assert.equal(entries[1].sessionId, "s1");
   assert.equal(entries[1].notify, true);
+  assert.equal(entries[1].style, "温柔"); // style persists to the manifest (spec #6)
   const found = await manifestFind(dir, "m-2.wav");
   assert.equal(found.callId, "c1");
   assert.equal(await manifestFind(dir, "nope.wav"), null);
@@ -222,6 +223,7 @@ test("planSpeechArtifact: no outPath → long/ + manifest entry", () => {
     notify: true,
     sessionId: "s1",
     callId: "c1",
+    style: "温柔",
   });
   assert.equal(plan.path, "/data/audio/long/m-x.wav");
   assert.deepEqual(plan.manifest, {
@@ -233,6 +235,7 @@ test("planSpeechArtifact: no outPath → long/ + manifest entry", () => {
     voice: "alloy",
     model: "mimo-v2.5-tts",
     notify: true,
+    style: "温柔",
   });
 });
 

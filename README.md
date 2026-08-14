@@ -66,6 +66,25 @@ With an explicit `outPath` the exact path is written instead (no strip, no
 manifest row). The Settings `audio.*` fields (`inlineThreshold`,
 `longRetainCount`, `longRetainDays`) tune presentation/retention live.
 
+## Speaking style & singing (#6/#7)
+
+MiMo TTS exposes rich prosody control; `voice_speak` surfaces it as:
+
+- **`style`** (default Settings `tts.style` = "温柔"): a natural-language
+  instruction (e.g. `轻快上扬`, or a full director-style paragraph). The style
+  is applied through a mixed channel — preset/voiceclone voices carry it in the
+  user message; voicedesign voices (whose user message is the voice description)
+  get an inline `(style)` tag prefix on the text.
+- **`sing: true`** (preset voices only): the text is prefixed with `(唱歌)` —
+  put lyrics in `text`. Combined with a style it becomes `(唱歌 style)`.
+  Inline tags in the text (`(风格)`, `[叹气]`, …) pass through untouched.
+- **`truncated`**: text beyond 2500 chars (official segmentation guidance) is
+  cut explicitly and the result flags `truncated: true`.
+
+The manifest row records `style` so a later regenerate can replay the timbre
+plus the prosody. Preset voices follow the official list (mimo_default /
+冰糖 / 茉莉 / 苏打 / 白桦 / Mia / Chloe / Milo / Dean).
+
 ## Install
 
 ```sh
