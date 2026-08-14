@@ -14,15 +14,41 @@ voice map: preset / voicedesign / voiceclone).
 | Layer | Capability | Backend |
 |---|---|---|
 | 🎤 | **Voice input** — mic button in the composer, transcript written into the input box | Browser Web Speech API (zero key) |
-| 🔊 | **Read-aloud** — speaker button on every assistant reply | Browser `speechSynthesis` (zero key) |
+| 🔊 | **Read-aloud** — speaker button on every assistant reply, voice configurable in Settings (朗读音色) | **Xiaomi MiMo TTS** via host `/_dsh/voice-mimo/speak` |
 | 📄 | **`voice_transcribe` tool** — audio file → text | **Xiaomi MiMo ASR** (`mimo-v2.5-asr`) |
 | 🗣️ | **`voice_speak` tool** — text → spoken audio file | **Xiaomi MiMo TTS** (`mimo-v2.5-tts` / `-voicedesign`) |
-| ⚙️ | **Settings page** — configure the voice map (OpenAI voice names → MiMo presets / voice design), live-applied | DSH Settings (vision-toolkit pattern) |
+| ⚙️ | **Settings page** — 朗读音色 for 🔊 + voice map (OpenAI voice names → MiMo presets / voice design), live-applied | DSH Settings (vision-toolkit pattern) |
 
 Unlike upstream dsh-voice (which targets OpenAI-compatible `/audio/transcriptions`
 and `/audio/speech` endpoints), this fork calls the MiMo API directly — MiMo has
 no OpenAI-compatible audio endpoints, so the tools are wired to its native
 chat-completions format (ASR text in the assistant message, TTS in `audio`).
+
+## Audio output routes (host)
+
+The 🔊 read-aloud path runs entirely through two same-origin host routes
+(node fetch/fs — no 64KB shell stdout cap):
+
+- `POST /_dsh/voice-mimo/speak {text}` — synthesize via MiMo TTS into
+  `audioDir/tmp/` (default `~/.dsh/cache/voice-mimo/tmp/`), record a manifest
+  entry, return `{id, audioUrl, bytes, voice, model}`. The voice comes from
+  Settings `tts.voice` (朗读音色) at request time, so a Settings change
+  applies on the next click.
+- `GET /_dsh/voice-mimo/audio/<id>.wav` — stream a stored file to the browser
+  (id resolved through the manifest, path confined to the audioDir subtree).
+
+Storage skeleton (layered `tmp/` + `long/`, per the audio-output spec):
+
+```
+audioDir (Settings `audio.dir`, default ~/.dsh/cache/voice-mimo/)
+├── tmp/            🔊 read-aloud artifacts — play-once; cleared on DSH startup
+├── long/           agent voice_speak artifacts (later slices)
+└── manifest.json   append-only JSONL: {id, sessionId, callId, path, createdAt, text, voice, model, notify}
+```
+
+The plugin reads/writes only inside its audioDir subtree; `voice_speak` still
+respects an explicit `outPath`. DSH startup (`apply`) recreates the skeleton
+and clears leftover `tmp/` contents idempotently.
 
 ## Install
 
