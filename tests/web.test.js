@@ -6,10 +6,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { performSpeak, performAudio, parseAudioId } from "../lib/web.js";
+import { performSpeak, performAudio, parseAudioId, speakHttp, audioHttp, AudioLookupError } from "../lib/web.js";
 import { manifestFind, resolveAudioDir, tmpStats } from "../lib/audio-store.js";
 
 async function makeDeps() {
@@ -59,12 +59,20 @@ test("performSpeak: synthesizes into tmp/, returns audioUrl, records manifest", 
   assert.equal(entry.notify, false);
 });
 
-test("performSpeak: explicit voice override + live settings voice", async () => {
+test("performSpeak: explicit voice override wins over settings; settings change applies live", async () => {
   const { ctx, getSettings } = await makeDeps();
-  const result = await performSpeak(ctx, getSettings, { text: "hi" }, { fetchImpl: okFetch("x") });
-  assert.equal(result.voice, "alloy");
-  // settings tts.voice is authoritative when no explicit voice
-  getSettings().value.tts.voice = "alloy";
+  // settings 朗读音色 = alloy
+  const a = await performSpeak(ctx, getSettings, { text: "hi" }, { fetchImpl: okFetch("x") });
+  assert.equal(a.voice, "alloy");
+  // explicit voice param overrides settings
+  const b = await performSpeak(ctx, getSettings, { text: "hi", voice: "fable" }, { fetchImpl: okFetch("x") });
+  assert.equal(b.voice, "fable");
+  // changing settings tts.voice applies on the next call (立即生效)
+  getSettings().value.voiceMap.fable = { type: "voicedesign", voice: "温柔的女声" };
+  getSettings().value.tts.voice = "fable";
+  const c = await performSpeak(ctx, getSettings, { text: "hi" }, { fetchImpl: okFetch("x") });
+  assert.equal(c.voice, "fable");
+  assert.equal(c.model, "mimo-v2.5-tts-voicedesign");
 });
 
 test("performSpeak: empty text rejected", async () => {
@@ -129,4 +137,59 @@ test("speak leaves tmp countable via tmpStats", async () => {
   const stats = await tmpStats(audioDir);
   assert.equal(stats.entries, 1);
   assert.equal(stats.bytes, 1);
+});
+
+// ── HTTP decision layer (speakHttp / audioHttp): status + JSON mapping ──
+
+test("speakHttp: missing/empty text → 400 invalid-request", async () => {
+  const { ctx, getSettings } = await makeDeps();
+  for (const body of [null, {}, { text: "" }, { text: "   " }, { text: 42 }]) {
+    const out = await speakHttp(ctx, getSettings, body, { fetchImpl: okFetch("x") });
+    assert.equal(out.status, 400);
+    assert.equal(out.json.error.code, "invalid-request");
+  }
+});
+
+test("speakHttp: success → 200 with audioUrl; MiMo failure → 500 speak-error", async () => {
+  const { ctx, getSettings } = await makeDeps();
+  const ok = await speakHttp(ctx, getSettings, { text: "你好" }, { fetchImpl: okFetch("WAV") });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.ok, true);
+  assert.match(ok.json.value.audioUrl, /^\/_dsh\/voice-mimo\/audio\//);
+  const fail = await speakHttp(ctx, getSettings, { text: "你好" }, {
+    fetchImpl: async () => ({ ok: false, status: 500, text: async () => "boom" }),
+  });
+  assert.equal(fail.status, 500);
+  assert.equal(fail.json.error.code, "speak-error");
+  assert.match(fail.json.error.message, /MiMo TTS HTTP 500/);
+});
+
+test("audioHttp: unknown/invalid id → 404; real fs failure → 500", async () => {
+  const { ctx, getSettings, audioDir } = await makeDeps();
+  const missing = await audioHttp(ctx, getSettings, "m-nope.wav");
+  assert.equal(missing.status, 404);
+  assert.equal(missing.json.error.code, "audio-not-found");
+  const evil = await audioHttp(ctx, getSettings, "../settings.yaml");
+  assert.equal(evil.status, 404);
+  // manifest entry whose file was deleted → 404 (not a crash)
+  const { audioUrl } = await performSpeak(ctx, getSettings, { text: "hi" }, { fetchImpl: okFetch("x") });
+  const id = audioUrl.split("/").pop();
+  await rm(join(audioDir, "tmp", id));
+  const gone = await audioHttp(ctx, getSettings, id);
+  assert.equal(gone.status, 404);
+});
+
+test("audioHttp: success → 200 with path + bytes", async () => {
+  const { ctx, getSettings } = await makeDeps();
+  const { audioUrl } = await performSpeak(ctx, getSettings, { text: "hi" }, { fetchImpl: okFetch("WAVDATA") });
+  const id = audioUrl.split("/").pop();
+  const out = await audioHttp(ctx, getSettings, id);
+  assert.equal(out.status, 200);
+  assert.equal(out.bytes, 7);
+  assert.equal((await readFile(out.path, "utf8")), "WAVDATA");
+});
+
+test("AudioLookupError: distinguish missing (404) from io (500)", async () => {
+  assert.ok(new AudioLookupError("not-found", "x") instanceof Error);
+  assert.equal(new AudioLookupError("not-found", "x").code, "not-found");
 });
