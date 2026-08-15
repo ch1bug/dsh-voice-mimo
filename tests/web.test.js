@@ -9,8 +9,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { performSpeak, performAudio, parseAudioId, speakHttp, audioHttp, AudioLookupError } from "../lib/web.js";
-import { manifestFind, resolveAudioDir, tmpStats } from "../lib/audio-store.js";
+import { performSpeak, performAudio, parseAudioId, speakHttp, audioHttp, AudioLookupError, performRegenerate, regenerateHttp, performArchiveCleanup, archiveCleanupHttp } from "../lib/web.js";
+import { manifestFind, manifestEntries, resolveAudioDir, tmpStats } from "../lib/audio-store.js";
 
 async function makeDeps() {
   const root = await mkdtemp(join(tmpdir(), "voice-mimo-web-"));
@@ -164,19 +164,24 @@ test("speakHttp: success → 200 with audioUrl; MiMo failure → 500 speak-error
   assert.match(fail.json.error.message, /MiMo TTS HTTP 500/);
 });
 
-test("audioHttp: unknown/invalid id → 404; real fs failure → 500", async () => {
+test("audioHttp: unknown/invalid id → 404; cleaned (file gone) → 410; real fs failure → 500", async () => {
   const { ctx, getSettings, audioDir } = await makeDeps();
   const missing = await audioHttp(ctx, getSettings, "m-nope.wav");
   assert.equal(missing.status, 404);
   assert.equal(missing.json.error.code, "audio-not-found");
   const evil = await audioHttp(ctx, getSettings, "../settings.yaml");
   assert.equal(evil.status, 404);
-  // manifest entry whose file was deleted → 404 (not a crash)
+  // Issue #5: manifest entry whose file was deleted (archived session /
+  // retention) → 410 Gone, so the client renders "已清理,可重新生成".
   const { audioUrl } = await performSpeak(ctx, getSettings, { text: "hi" }, { fetchImpl: okFetch("x") });
   const id = audioUrl.split("/").pop();
   await rm(join(audioDir, "tmp", id));
-  const gone = await audioHttp(ctx, getSettings, id);
-  assert.equal(gone.status, 404);
+  const cleaned = await audioHttp(ctx, getSettings, id);
+  assert.equal(cleaned.status, 410);
+  assert.equal(cleaned.json.error.code, "audio-cleaned");
+  // manifest entry survives the cleanup (regenerate parameters intact)
+  const entry = await manifestFind(audioDir, id);
+  assert.equal(entry.text, "hi");
 });
 
 test("audioHttp: success → 200 with path + bytes", async () => {
@@ -267,4 +272,117 @@ test("performSpeak: manifest entry records the applied style", async () => {
   const id = audioUrl.split("/").pop();
   const entry = await manifestFind(audioDir, id);
   assert.equal(entry.style, "活泼");
+});
+
+// ── issue #5: archive cleanup + regenerate ──
+
+test("performArchiveCleanup: removes each listed session's long/ audio, leaves manifest + others", async () => {
+  const { ctx, getSettings, audioDir } = await makeDeps();
+  const { initAudioStore, manifestAppend } = await import("../lib/audio-store.js");
+  const { mkdir } = await import("node:fs/promises");
+  await initAudioStore(audioDir);
+  await mkdir(join(audioDir, "long"), { recursive: true });
+  await writeFile(join(audioDir, "long", "m-s1.wav"), "S1");
+  await manifestAppend(audioDir, { id: "m-s1.wav", rel: "long/m-s1.wav", sessionId: "s1", callId: "c1", text: "one" });
+  await writeFile(join(audioDir, "long", "m-s2.wav"), "S2");
+  await manifestAppend(audioDir, { id: "m-s2.wav", rel: "long/m-s2.wav", sessionId: "s2", callId: "c2", text: "two" });
+  const result = await performArchiveCleanup(ctx, getSettings, ["s1", "nope"]);
+  assert.deepEqual(result.cleaned, [
+    { sessionId: "s1", removed: 1 },
+    { sessionId: "nope", removed: 0 },
+  ]);
+  await assert.rejects(readFile(join(audioDir, "long", "m-s1.wav")));
+  assert.equal(await readFile(join(audioDir, "long", "m-s2.wav"), "utf8"), "S2");
+  // manifest survives (regenerate params intact)
+  assert.equal((await manifestFind(audioDir, "m-s1.wav")).text, "one");
+});
+
+test("archiveCleanupHttp: non-array body → 400; success → 200 with per-session counts", async () => {
+  const { ctx, getSettings } = await makeDeps();
+  const bad = await archiveCleanupHttp(ctx, getSettings, {});
+  assert.equal(bad.status, 400);
+  assert.equal(bad.json.error.code, "invalid-request");
+  const ok = await archiveCleanupHttp(ctx, getSettings, { sessionIds: [] });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.json.value.cleaned, []);
+});
+
+test("performRegenerate: re-synthesizes a cleaned long/ artifact under the same id, restores playability", async () => {
+  const { ctx, getSettings, audioDir } = await makeDeps();
+  const { initAudioStore, manifestAppend } = await import("../lib/audio-store.js");
+  const { mkdir } = await import("node:fs/promises");
+  await initAudioStore(audioDir);
+  await mkdir(join(audioDir, "long"), { recursive: true });
+  // a long/ artifact that was cleaned (file gone, manifest kept)
+  await manifestAppend(audioDir, {
+    id: "m-clean.wav", rel: "long/m-clean.wav", sessionId: "s9", callId: "c9",
+    text: "欢迎回来", voice: "alloy", model: "mimo-v2.5-tts", style: "温柔",
+  });
+  // cleaned → 410 before regenerate
+  assert.equal((await audioHttp(ctx, getSettings, "m-clean.wav")).status, 410);
+
+  const calls = [];
+  const result = await performRegenerate(ctx, getSettings, { sessionId: "s9", callId: "c9" }, { fetchImpl: capturingFetch(calls) });
+  assert.equal(result.id, "m-clean.wav"); // SAME id — strip URL stays valid
+  assert.equal(result.regenerated, true);
+  assert.equal(result.audioUrl, "/_dsh/voice-mimo/audio/m-clean.wav");
+  assert.equal(result.bytes, 1);
+  // request reproduced from the manifest record (style rides the user message)
+  assert.equal(calls[0].messages[0].content, "温柔");
+  assert.equal(calls[0].messages[1].content, "欢迎回来");
+  // file restored under long/, playable again
+  assert.equal(await readFile(join(audioDir, "long", "m-clean.wav"), "utf8"), "x");
+  assert.equal((await audioHttp(ctx, getSettings, "m-clean.wav")).status, 200);
+  // manifest gained a regenerate line (createdAt bump) — latest wins
+  const all = await manifestEntries(audioDir);
+  assert.equal(all.filter((e) => e.id === "m-clean.wav").length, 2);
+});
+
+test("performRegenerate: unknown (sessionId, callId) pair → not-found; missing params → invalid-request", async () => {
+  const { ctx, getSettings } = await makeDeps();
+  await assert.rejects(
+    performRegenerate(ctx, getSettings, { sessionId: "nope", callId: "nope" }, { fetchImpl: okFetch("x") }),
+    (e) => e instanceof AudioLookupError && e.code === "not-found",
+  );
+  await assert.rejects(
+    performRegenerate(ctx, getSettings, { sessionId: "s", callId: "" }, { fetchImpl: okFetch("x") }),
+    (e) => e instanceof AudioLookupError && e.code === "invalid-request",
+  );
+});
+
+test("performRegenerate: entry without a voice field falls back to the read-aloud default", async () => {
+  const { ctx, getSettings, audioDir } = await makeDeps();
+  const { initAudioStore, manifestAppend } = await import("../lib/audio-store.js");
+  const { mkdir } = await import("node:fs/promises");
+  await initAudioStore(audioDir);
+  await mkdir(join(audioDir, "long"), { recursive: true });
+  await manifestAppend(audioDir, { id: "m-novoice.wav", rel: "long/m-novoice.wav", sessionId: "s1", callId: "c1", text: "hi", model: "mimo-v2.5-tts" });
+  const calls = [];
+  const result = await performRegenerate(ctx, getSettings, { sessionId: "s1", callId: "c1" }, { fetchImpl: capturingFetch(calls) });
+  assert.equal(result.voice, "alloy"); // DEFAULT_READ_ALOUD_VOICE, not undefined
+  assert.equal(calls[0].messages[0].content, "温柔"); // DEFAULT_STYLE also applies
+});
+
+test("regenerateHttp: status mapping — 400 invalid / 404 not-found / 200 ok / 500 synthesis failure", async () => {
+  const { ctx, getSettings, audioDir } = await makeDeps();
+  const { initAudioStore, manifestAppend } = await import("../lib/audio-store.js");
+  const { mkdir } = await import("node:fs/promises");
+  await initAudioStore(audioDir);
+  await mkdir(join(audioDir, "long"), { recursive: true });
+  await manifestAppend(audioDir, { id: "m-r.wav", rel: "long/m-r.wav", sessionId: "s1", callId: "c1", text: "hi", voice: "alloy", model: "mimo-v2.5-tts", style: "温柔" });
+
+  const invalid = await regenerateHttp(ctx, getSettings, { sessionId: "" });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.json.error.code, "invalid-request");
+  const missing = await regenerateHttp(ctx, getSettings, { sessionId: "x", callId: "y" });
+  assert.equal(missing.status, 404);
+  assert.equal(missing.json.error.code, "artifact-not-found");
+  const ok = await regenerateHttp(ctx, getSettings, { sessionId: "s1", callId: "c1" }, { fetchImpl: okFetch("W") });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.value.id, "m-r.wav");
+  const fail = await regenerateHttp(ctx, getSettings, { sessionId: "s1", callId: "c1" }, {
+    fetchImpl: async () => ({ ok: false, status: 500, text: async () => "boom" }),
+  });
+  assert.equal(fail.status, 500);
+  assert.equal(fail.json.error.code, "regenerate-error");
 });

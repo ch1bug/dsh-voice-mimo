@@ -23,6 +23,9 @@ import {
   tmpStats,
   wavDurationSeconds,
   planSpeechArtifact,
+  cleanupSessionArtifacts,
+  enforceLongRetention,
+  longLiveEntries,
   wslPathOf,
 } from "../lib/audio-store.js";
 
@@ -224,6 +227,7 @@ test("planSpeechArtifact: no outPath → long/ + manifest entry", () => {
     sessionId: "s1",
     callId: "c1",
     style: "温柔",
+    sing: true,
   });
   assert.equal(plan.path, "/data/audio/long/m-x.wav");
   assert.deepEqual(plan.manifest, {
@@ -236,6 +240,7 @@ test("planSpeechArtifact: no outPath → long/ + manifest entry", () => {
     model: "mimo-v2.5-tts",
     notify: true,
     style: "温柔",
+    sing: true,
   });
 });
 
@@ -269,4 +274,100 @@ test("planSpeechArtifact: non-string sessionId/callId are coerced to null (regre
   });
   assert.equal(plan.manifest.sessionId, null);
   assert.equal(plan.manifest.callId, null);
+});
+
+// ── issue #5: archive cleanup + loose retention ──
+
+test("cleanupSessionArtifacts: deletes the session's long/ files, keeps manifest lines, never touches others", async () => {
+  const dir = await tempAudioDir();
+  await initAudioStore(dir);
+  // s1 has two artifacts, s2 one, plus a tmp 🔊 artifact with no session.
+  await writeFile(join(dir, "long", "m-a.wav"), "AAA");
+  await manifestAppend(dir, { id: "m-a.wav", rel: "long/m-a.wav", sessionId: "s1", callId: "c1", text: "a" });
+  await writeFile(join(dir, "long", "m-b.wav"), "BBB");
+  await manifestAppend(dir, { id: "m-b.wav", rel: "long/m-b.wav", sessionId: "s1", callId: "c2", text: "b" });
+  await writeFile(join(dir, "long", "m-c.wav"), "CCC");
+  await manifestAppend(dir, { id: "m-c.wav", rel: "long/m-c.wav", sessionId: "s2", callId: "c3", text: "c" });
+  await writeFile(join(dir, "tmp", "m-t.wav"), "TTT");
+  await manifestAppend(dir, { id: "m-t.wav", rel: "tmp/m-t.wav", text: "t" });
+
+  const out = await cleanupSessionArtifacts(dir, "s1");
+  assert.deepEqual(out, { removed: 2, entries: 2 });
+  // s1's files gone, others untouched
+  await assert.rejects(readFile(join(dir, "long", "m-a.wav")));
+  await assert.rejects(readFile(join(dir, "long", "m-b.wav")));
+  assert.equal(await readFile(join(dir, "long", "m-c.wav"), "utf8"), "CCC");
+  assert.equal(await readFile(join(dir, "tmp", "m-t.wav"), "utf8"), "TTT");
+  // manifest lines survive (regenerate parameter record)
+  assert.equal((await manifestFind(dir, "m-a.wav")).text, "a");
+  assert.equal((await manifestFind(dir, "m-c.wav")).text, "c");
+  // idempotent
+  assert.deepEqual(await cleanupSessionArtifacts(dir, "s1"), { removed: 0, entries: 2 });
+  // non-string / empty session ids are no-ops
+  assert.deepEqual(await cleanupSessionArtifacts(dir, ""), { removed: 0, entries: 0 });
+});
+
+test("manifestFind: latest line wins for a duplicated id (regenerate append)", async () => {
+  const dir = await tempAudioDir();
+  await manifestAppend(dir, { id: "m-x.wav", rel: "long/m-x.wav", sessionId: "s1", callId: "c1", text: "first", createdAt: "2020-01-01T00:00:00.000Z" });
+  await manifestAppend(dir, { id: "m-x.wav", rel: "long/m-x.wav", sessionId: "s1", callId: "c1", text: "first", createdAt: "2026-01-01T00:00:00.000Z" });
+  const entry = await manifestFind(dir, "m-x.wav");
+  assert.equal(entry.createdAt, "2026-01-01T00:00:00.000Z");
+});
+
+test("enforceLongRetention: prunes oldest beyond count, keeps newest, manifest survives", async () => {
+  const dir = await tempAudioDir();
+  await initAudioStore(dir);
+  const base = Date.parse("2026-01-01T00:00:00.000Z");
+  for (let i = 1; i <= 5; i++) {
+    const id = `m-${i}.wav`;
+    await writeFile(join(dir, "long", id), `F${i}`);
+    await manifestAppend(dir, {
+      id, rel: `long/${id}`, sessionId: "s1", callId: `c${i}`, text: `t${i}`,
+      createdAt: new Date(base + i * 60_000).toISOString(),
+    });
+  }
+  const out = await enforceLongRetention(dir, { count: 3, days: 0 });
+  assert.equal(out.removed, 2); // oldest two (m-1, m-2) pruned
+  await assert.rejects(readFile(join(dir, "long", "m-1.wav")));
+  await assert.rejects(readFile(join(dir, "long", "m-2.wav")));
+  assert.equal(await readFile(join(dir, "long", "m-3.wav"), "utf8"), "F3");
+  assert.equal(await readFile(join(dir, "long", "m-5.wav"), "utf8"), "F5");
+  // manifest lines all survive
+  assert.equal((await manifestEntries(dir)).length, 5);
+});
+
+test("enforceLongRetention: prunes older than days; skips already-missing files", async () => {
+  const dir = await tempAudioDir();
+  await initAudioStore(dir);
+  const now = Date.now();
+  await writeFile(join(dir, "long", "m-old.wav"), "OLD");
+  await manifestAppend(dir, { id: "m-old.wav", rel: "long/m-old.wav", sessionId: "s1", callId: "c1", text: "old", createdAt: new Date(now - 40 * 24 * 3600 * 1000).toISOString() });
+  await writeFile(join(dir, "long", "m-new.wav"), "NEW");
+  await manifestAppend(dir, { id: "m-new.wav", rel: "long/m-new.wav", sessionId: "s1", callId: "c2", text: "new", createdAt: new Date(now - 1000).toISOString() });
+  // a manifest line whose file was already archived-cleaned — nothing to do
+  await manifestAppend(dir, { id: "m-gone.wav", rel: "long/m-gone.wav", sessionId: "s1", callId: "c3", text: "gone", createdAt: new Date(now - 1000).toISOString() });
+
+  const out = await enforceLongRetention(dir, { count: 200, days: 30 });
+  assert.equal(out.removed, 1); // only m-old (missing files aren't counted)
+  await assert.rejects(readFile(join(dir, "long", "m-old.wav")));
+  assert.equal(await readFile(join(dir, "long", "m-new.wav"), "utf8"), "NEW");
+});
+
+test("enforceLongRetention: regenerate-append bumps createdAt so a restored file is not immediately pruned", async () => {
+  const dir = await tempAudioDir();
+  await initAudioStore(dir);
+  const old = new Date(Date.now() - 40 * 24 * 3600 * 1000).toISOString();
+  await writeFile(join(dir, "long", "m-x.wav"), "V1");
+  await manifestAppend(dir, { id: "m-x.wav", rel: "long/m-x.wav", sessionId: "s1", callId: "c1", text: "t", createdAt: old });
+  // simulate regenerate: same id, fresh createdAt line
+  await writeFile(join(dir, "long", "m-x.wav"), "V2");
+  await manifestAppend(dir, { id: "m-x.wav", rel: "long/m-x.wav", sessionId: "s1", callId: "c1", text: "t" });
+  // retention sees the LATEST createdAt per id (longLiveEntries) → survives
+  const live = await longLiveEntries(dir);
+  assert.equal(live.length, 1);
+  assert.notEqual(live[0].createdAt, old);
+  const out = await enforceLongRetention(dir, { count: 200, days: 30 });
+  assert.equal(out.removed, 0);
+  assert.equal(await readFile(join(dir, "long", "m-x.wav"), "utf8"), "V2");
 });
